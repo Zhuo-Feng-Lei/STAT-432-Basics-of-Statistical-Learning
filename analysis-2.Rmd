@@ -1,0 +1,128 @@
+---
+title: "Heart Disease Presence"
+author: "Zhuo Feng Lei (zlei5@illinois.edu)"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document: 
+    theme: cosmo
+    toc: yes
+  pdf_document: default
+urlcolor: BrickRed
+---
+
+```{r, setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, fig.align = 'center')
+```
+
+```{r, load-packages, include = FALSE}
+library(tidyverse)
+library(caret)
+library(readr)
+library(tibble)
+library(rsample)
+library(dplyr)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(ggplot2)
+library(knitr)
+library(kableExtra)
+library(purrr)
+library(naivebayes)
+library(randomForest)
+```
+
+***
+
+# Abstract
+
+Many people die from heart disease every year. If heart disease can be detected early on, many lives would be saved. Vessels with greater than 50% diameter narrowing indicates the presence of heart disease. Statistical techniques are used to find the best statistical model that best predict or classify the presence and seriousness of heart disease from patient data. 
+
+***
+
+# Introduction
+
+According to the Center of Disease Control, heart disease is the leading cause of death for both men and women. Every year, around 610,000 people die from heart disease in the United States every year. Due to its prevalence in fatalities, it is important to detect the presence of heart disease early in order to start treatment or prevention. However, heart disease deaths varies by race, ethnicity, and other factors. Therefore, being able to accurately predict or classify the presence of heart disease from patient data can save the lives of many.
+
+***
+
+# Methods
+
+## Data
+
+The dataset was accessed via ucidata package. The package contains 4 databases concerning heart disease diagnosis. Each database contains data from different sources: Cleveland Clinic Foundation, Hungarian Institute of Cardiology, V.A. Medical Center, and University Hospital. The dataset used for the analysis is created by combining the 4 different databases, containing 12 variables and 740 observations. It stores information on the patients' attributes and demographics as well as lifestyle and health conditions. The response variable we will be looking at is num, the number of vessels with greater than 50% diameter narrowing. The presence of vessels with greater than 50% diameter narrowing indicates presence of heart disease. The heart disease is more severe as the number increases. 
+
+```{r, load-data, message = FALSE}
+heart = read_csv("https://fall-2019.stat432.org/analyses/data/heart-disease.csv")
+```
+
+```{r, split-data}
+set.seed(42)
+# test-train split
+heart_tst_trn_split = initial_split(heart, prop = 0.80)
+heart_trn = training(heart_tst_trn_split)
+heart_trn = heart_trn[,1:12]
+heart_tst = testing(heart_tst_trn_split)
+# estimation-validation split
+heart_est_val_split = initial_split(heart_trn, prop = 0.80)
+heart_est = training(heart_est_val_split)
+heart_val = testing(heart_est_val_split)
+```
+
+## Modeling
+
+In order to predict the number of vessels with greater than 50% diameter narrowing, four modeling techniques were considered: k's nearest neighbor, random forest, naive bayes, and decision tree models. All models are fitted with num as the response and all other variables as the predictors. Using the train function from the caret package, the best model parameter is determined. In addition, models are later evaluated for accuracy using 10 fold cross-validation or out of bag resample (whichever is more appropriate). 
+
+```{r, eval = FALSE}
+#random forest
+set.seed(42)
+train(num ~ ., data = heart_trn, method = "rf", trControl = trainControl(method = "oob"))
+
+#naive bayes model
+set.seed(42)
+train(num ~ ., data = heart_trn, method = "naive_bayes", trControl = trainControl(method = "cv", number = 10))
+
+#k's nearest neighbor
+set.seed(42)
+train(num ~ ., data = heart_trn, method = "knn", trControl = trainControl(method = "cv", number = 10) )
+
+#decision tree model
+set.seed(42)
+train(num ~ ., data = heart_trn, method = "rpart", trControl = trainControl(method = "cv", number = 10))
+```
+
+## Evaluation
+
+To evaluate the ability to predict the number of vessels with greater than 50% narrowing, the data was split into training and testing sets. Model accuracy is reported using the testing data in the Results section.
+
+***
+
+# Results
+
+```{r, numeric-results}
+results = tibble(
+  Model = c("Random Forest", "Naive Bayes", "K's Nearest Neighbor", "Classification Tree"),
+  Best = c("mtry = 2", "laplace = 0, usekernel = TRUE and adjust = 1", "k = 7", "cp = 0.0245098"),
+  Evaluation = c("oob", "10 fold cv", "10 fold cv", "10 fold cv"),
+  Accuracy = c("0.5929054", "0.5709792", "0.4782285", "0.5660141")
+)
+
+kable(results) %>%
+  kable_styling("striped", full_width = F)
+```
+
+***
+
+# Discussion
+
+```{r}
+set.seed(42)
+rf_mod_pred = predict.train(train(num ~ ., data = heart_trn, method = "rf", trControl = trainControl(method = "oob")), heart_tst, type = "raw")
+calc_misclass = function(act, pred){
+  mean(act != pred)
+}
+print("Misclassification Rate:")
+calc_misclass(heart_tst$num, rf_mod_pred)
+```
+
+It is important to treat heart disease as early as possible. The sooner heart disease is detected, the easier it is to treat and prevent heart disease. Therefore, it is important to find a model that can accurately predict or classify the seriousness and presence of heart disease. Out of the four models that was fitted to the data, k's nearest neighbor has the lowest accuracy out of the four and should not be used for classifying the presence of heart disease. The random forest model with mtry = 2 classified the presence of heart disease the best. The random forest model is only accurate 59.29% of the time. The random forest model only misclassified ~48.98% of the testing data. The model is faily inaccurate predicting the testing data but the error rate is too large for it to practical. The medical field is very strict and have no room for error, thus our model need to have atleast 95% accuracy. As a result, additional data and testing of other statistical learning techniques is needed for further improvement and analysis.

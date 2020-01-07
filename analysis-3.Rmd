@@ -1,0 +1,123 @@
+---
+title: "Credit Card Fraud"
+author: "Zhuo Feng Lei (zlei5@illinois.edu)"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document: 
+    theme: cosmo
+    toc: yes
+  pdf_document: default
+urlcolor: BrickRed
+---
+
+```{r, setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, fig.align = 'center')
+```
+
+```{r, echo = FALSE}
+library(tidyverse)
+library(caret)
+library(readr)
+library(tibble)
+library(rsample)
+library(dplyr)
+library(ggplot2)
+library(knitr)
+library(kableExtra)
+library(purrr)
+library(naivebayes)
+library(gbm)
+library(ranger)
+```
+
+***
+
+# Abstract
+
+In order to protect customers, banks must be able to recognize fraudulent credit card transcations. Statistical learning methods and techniques are utilized to find an accurate model that best classify fraudulent transactions. 
+
+***
+
+# Introduction
+
+According to statistics, global credit card and debit card fraud resulted in losses amounting to $21.84 billion during 2005.
+Card issuers (the credit/debit card company) incurred 72% of the losses while merchants endured the rest of the losses. In order to minimize these losses and maintain trust and confidence in financial institutions, card companies want to be able to recognize fraudulent activities. By recognizing fraudulent transactions, card companies are able to put in preventive measures to protect merchants and consumers. 
+
+***
+
+# Methods
+
+## Data
+
+The data was accessed via Kaggle. [^1] The dataset contains transaction information from European cardholders in September 2013. The dataset have 284,807 observations and 31 variables. Because of confidentiality issues, features V1, V2, ... V28 are the principal components obtained with PCA transformation. Time and amount are the only features that are not transformed. The response variable of interest is "Class", whether the transaction made is fraud or genuine. The dataset is highly unbalanced. The positive class (frauds) only account for 0.172% of all transactions.
+
+```{r, split-data}
+set.seed(42)
+# test-train split
+cc = read_csv(file = "https://fall-2019.stat432.org/analyses/data/cc-sub.csv")
+
+# randomly split data
+trn_idx = sample(nrow(cc), size = 0.5 * nrow(cc))
+cc_trn = cc[trn_idx, ]
+cc_tst = cc[-trn_idx, ]
+```
+
+## Modeling
+
+In order to build a classifier to predict whether transactions are fraudulent, three modeling techniques were considered: ranger method, naive bayes, stochastic gradient boosting. All models are fitted with Class as the response and all other variables except time as predictors. Since time is a just a timestamp, I will only consider v1 to v28, the principal components obtained with pca transformation. Models are evaluated for sensitivity using 5 fold cross-validation. As mentioned previously, the dataset contains a class imbalance. As a result, I will be using the rose method within crossvalidition for subsampling. 
+
+```{r, cache = TRUE}
+set.seed(42)
+rf_mod = train(Class ~ . - Time, data = cc_trn, method = "ranger", trControl = trainControl(method = "cv", number = 5, summaryFunction = twoClassSummary, classProbs = TRUE), metric = "Sens", verbose = FALSE)
+set.seed(42)
+bayes_mod = train(Class ~ . - Time, data = cc_trn, method = "naive_bayes", trControl = trainControl(method = "cv", number = 5, summaryFunction = twoClassSummary, classProbs = TRUE), metric = "Sens")
+set.seed(42)
+gbm_mod = train(Class ~ . - Time, data = cc_trn, method = "gbm", trControl = trainControl(method = "cv", number = 5, summaryFunction = twoClassSummary, classProbs = TRUE), metric = "Sens", verbose = FALSE)
+```
+
+## Evaluation
+
+To evaluate the ability to predict fraudulent transactions, the data was split into training and testing sets. Model sensitivity and false positive rate is reported using the testing data in the Results section.
+
+***
+
+# Results
+
+```{r, numeric-results}
+results = tibble(
+  Model = c("Ranger",
+            "Naive Bayes", 
+            "Stochastic Gradient Boosting"),
+  Best = c("mtry = 15, splitrule = extratrees, min.node.size = 1",
+           "laplace = 0, usekernel = FALSE and adjust = 1",
+           "n.trees = 150, interaction.depth = 3, shrinkage = 0.1, n.minobsinnode = 10"),
+  ROC = c("0.9858473", "0.9813539", "0.5895600"),
+  Sensitivity = c("0.6618182", "0.7945455", "0.4690909"),
+  Specificity = c("0.9998397", "0.9777529", "0.9976350")
+)
+
+kable(results) %>%
+  kable_styling("striped", full_width = F)
+```
+
+***
+
+# Discussion
+
+```{r}
+set.seed(42)
+nb_mod_pred = predict.train(bayes_mod, cc_tst, type = "raw")
+calc_misclass = function(act, pred){
+  mean(act != pred)
+}
+print("Misclassification Rate:")
+calc_misclass(cc_tst$Class, nb_mod_pred)
+```
+
+It is important to detect fraudulent transactions to make sure that customers don't have to pay for what they didn't order. If fraudulent transactions goes undetected, then banks or sellers will lose money from reimbursing customers. Therefore, it is important to find a model that can accurately classify whether transactions are genuine or fraudulent. Out of the three models, the naive bayes method has the highest sensitivity (true positive rate) but the lowest specificity (true negative rate). Naive bayes and the ranger model both have very high ROC values. The naives bayes model misclassified 2.312% of the data in the testing dataset. This may be due to the fact that the dataset contained very little positive cases (fraud), and the model may be classifying transactions as genuine majority of the time. The dataset is highly imbalanced. Additional statistical techniques are needed to address this imbalance for further analysis and to evaluate the best model for classifying fraudulent transactions. 
+
+***
+
+# Appendix
+
+[^1]: [Credit Card Fraud Open Data](https://www.kaggle.com/mlg-ulb/creditcardfraud)

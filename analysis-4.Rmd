@@ -1,0 +1,151 @@
+---
+title: "Wine Quality Analysis"
+author: "Zhuo Feng Lei (zlei5@illinois.edu)"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document: 
+    theme: cosmo
+    toc: yes
+  pdf_document: default
+urlcolor: BrickRed
+---
+
+```{r, setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, fig.align = 'center')
+```
+
+```{r, load-packages, include = FALSE}
+library(tidyverse)
+library(caret)
+library(readr)
+library(tibble)
+library(rsample)
+library(dplyr)
+library(caret)
+library(rpart)
+library(ggplot2)
+library(knitr)
+library(kableExtra)
+library(purrr)
+library(randomForest)
+library(glmnet)
+```
+
+***
+
+# Abstract
+
+Wine is a common beverage consumed all over the world. Therefore, it is useful to be able to predict the wine quality from 
+physicochemical variables. Statistical techniques are used to find the best statistical model that best predict wine quality from wine data.
+
+***
+
+# Introduction
+
+Wine is an alcoholic drink made from fermented grapes, and the five countries with the largest wine-producing regions are in Italy, Spain, France, the United States, and China. Yeast consumes the sugar in the grapes and converts it to ethanol, carbon dioxide, and heat. Wine is a popular alcoholic beverage. Liquor companies would want to ensure that their wines are high quality. Consumers may want to ensure that the wine they are buying are high quality as well. Therefore, it is interesting to see if we can find a good model to predict the qualities of wine from chemical test results. 
+
+***
+
+# Methods
+
+## Data
+
+The dataset was accessed via ucidata package. [^1] The dataset contains information pertaining to red and white variants of the Portuguese "Vinho Verde" wine. There are a total of 13 variables and 6497 observations. 12 of the variables are results from physicochemical tests such as density, pH, and amount of alochol. Due to privacy and logistic issues, only physicochemical (inputs) and sensory (the output) variables are available. As a result, the dataset does not contain types of materials used to make the wine, brand of the company, price, etc. The classes are ordered but not balanced. There are many more normal wines than excellent or poor ones. The variable of interest is quality_num, the rating of the quality of the wine.
+
+```{r, load-data, message = FALSE}
+wine = as_tibble(ucidata::wine)
+```
+
+```{r, split-data}
+set.seed(42)
+
+wine = wine %>% 
+  mutate(quality_num = quality,
+         quality_cat = as.factor(quality)) %>% 
+  select(-quality)
+
+trn_idx = sample(nrow(wine), size = .7 * nrow(wine))
+wine_trn = wine[trn_idx, ]
+wine_tst = wine[-trn_idx, ]
+```
+
+## Modeling
+
+For this dataset, regression or classification statistical techniques can be used for analysis. For this analysis, regression models will be used to predict the quality of wine. Four modeling techniques were considered: k's nearest neighbors, decision tree, glmnet, and random forest. All models are fitted with quality_num as the response and all other variables except quality_cat as the predictors. Using the train or the cv.glmnet function, the best model parameter is determined. In addition, models are later evaluated for accuracy using 10 fold cross-validation or out of bag resample (whichever is more appropriate). 
+
+```{r, eval = FALSE}
+#k's nearest neighbor
+set.seed(42)
+train(quality_num ~ . - quality_cat, data = wine_trn, method = "knn", trControl = trainControl(method = "cv", number = 10) )
+
+#decision tree model
+set.seed(42)
+train(quality_num ~ . - quality_cat, data = wine_trn, method = "rpart", trControl = trainControl(method = "cv", number = 10))
+
+#penalized general linear model
+wine_trn_x = model.matrix(quality_num ~ . - quality_cat, data = wine_trn)[, -1]
+set.seed(42)
+cvglm_mod = cv.glmnet(wine_trn_x, wine_trn$quality_num, nfolds = 10)
+set.seed(42)
+predicted = predict(cvglm_mod, wine_trn_x, s = cvglm_mod$lambda.min)
+RMSE(predicted, wine_trn$quality_num)
+
+#random forest model
+set.seed(42)
+train(quality_num ~ . - quality_cat, data = wine_trn, method = "rf", trControl = trainControl(method = "oob"))
+```
+
+## Evaluation
+
+To evaluate the ability to predict wine quality, the data was split into training and testing sets. Model testing RMSE and accuracy is reported using the testing data in the results section.
+
+***
+
+# Results
+
+```{r, numeric-results}
+results = tibble(
+  Model = c("K's Nearest Neighbor",
+            "Classification Tree",
+            "Penalized General Linear Model",
+            "Random Forest"),
+  Best = c("k = 7",
+           "cp = 0.03129145",
+           "lambda = 0.0002493437",
+           "mtry = 2"),
+  Evaluation = c("10 fold Cross-Validation",
+                 "10 fold Cross-Validation", 
+                 "10 fold Cross-Validation", 
+                 "Out of Bag Sampling"),
+  RMSE = c("0.8152009",
+           "0.7822182",
+           "0.7390662", 
+           "0.6176610")
+)
+
+kable(results) %>%
+  kable_styling("striped", full_width = F)
+```
+
+***
+
+# Discussion
+
+```{r}
+#regularization 
+set.seed(42)
+reg_rf = randomForest(quality_num ~ . - quality_cat, data = wine_trn, mtry = 2, ntree = 100)
+set.seed(42)
+predicted = predict(reg_rf, wine_tst)
+
+print("Out of Bag Sampling Testing RMSE:")
+sqrt((sum((wine_tst$quality_num - predicted) ^ 2)) / nrow(wine_tst))
+
+print("Test Accuracy:")
+rounded = round(predicted)
+length(which(rounded == wine_tst$quality_cat)) / nrow(wine_tst)
+```
+
+From both a consumer's and a producer's standpoint, it is useful to be able to check the quality of the wine from physicochemical test results. Being able to predict wine quality will allow consumers to select finer wines and allow producers to make better wine. Out of the four models that was fitted to the data, the random forest model have the lowest validation rmse while K's nearest neighbors have the highest. Therefore, the random forest model with mtry = 2 was able to predict wine quality the best from the training data. After regularization, the random forest model has a testing rmse of .595626. This is quite high and indicates the model does not predict wine quality very well. The test accuracy is .6789744 and indicates that the model was only able to accurately predict ~68% of the testing data. None of the methods used in this analysis predicts wine quality with minimal error. Additional data and testing of other statistical learning techniques is needed to find a more accurate model for predicting wine quality.
+
+[^1]: [Wine Quality Dataset](https://archive.ics.uci.edu/ml/datasets/Wine+Quality)
