@@ -1,0 +1,243 @@
+---
+title: "Brooklyn Airbnb Pricing"
+author: "Zhuo Feng Lei (zlei5@illinois.edu)"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document: 
+    theme: cosmo
+    toc: yes
+  pdf_document: default
+urlcolor: BrickRed
+---
+
+```{r, setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, fig.align = 'center')
+```
+
+```{r, load-packages, include = FALSE}
+library(readr)
+library(tibble)
+library(rsample)
+library(dplyr)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(ggplot2)
+library(knitr)
+library(kableExtra)
+library(purrr)
+```
+
+***
+
+# Abstract
+
+Nowadays, renting airbnb instead of hotel rooms is becoming more popular amongst tourists and travelers. Statistical techniques are used to find the best statistical model that best predict prices of short term rentals in Brooklyn, New York and determine what variables are significant in predicting prices. 
+
+***
+
+# Introduction
+
+Airbnb is an online marketplace for arranging or offering lodging. Nowadays, many travelers and tourists opt to stay book airbnb rentals instead of hotel rooms to get a more personalized experience and to expand travel possibilities. As consumers and possibly suppliers, we want to be able to predict prices of rentals. When traveling, we often try to stay within a certain budget. By predicting the price of rental based on different factors, we can plan our budget and trip more precisely. As suppliers, we can use models to predict prices to learn about our competitions or the values of our own properties. 
+
+***
+
+# Methods
+
+## Data
+
+The data was accessed via Kaggle. [^1] It contains information on Airbnb listings in New York, NY during 2019 including price, rental attributes, and location. For the purposes of this analysis, the data was restricted to short term (one week or less) rentals in Brooklyn that rent for less than $1000 a night. (Additionally, only rentals that have been reviewed are included.)
+
+```{r, load-data, message = FALSE}
+airbnb = read_csv(file = "data/AB_NYC_2019.csv")
+```
+
+```{r, subset-data}
+brooklyn = airbnb %>% 
+  filter(minimum_nights <= 7) %>%
+  filter(neighbourhood_group == "Brooklyn") %>% 
+  filter(number_of_reviews > 0) %>%
+  filter(price > 0, price < 1000) %>% 
+  na.omit() %>% 
+  select(latitude, longitude, room_type, price, minimum_nights, number_of_reviews, 
+         reviews_per_month, calculated_host_listings_count, availability_365) %>% 
+  mutate(room_type = as.factor(room_type))
+```
+
+```{r, split-data}
+set.seed(42)
+# test-train split
+bk_tst_trn_split = initial_split(brooklyn, prop = 0.80)
+bk_trn = training(bk_tst_trn_split)
+bk_tst = testing(bk_tst_trn_split)
+# estimation-validation split
+bk_est_val_split = initial_split(bk_trn, prop = 0.80)
+bk_est = training(bk_est_val_split)
+bk_val = testing(bk_est_val_split)
+```
+
+## Modeling
+
+In order to predict the price of rentals, three modeling techniques were considered: linear models, k-nearest neighbors models, and decision tree models. 
+
+- Linear models with and without log transformed responses were considered. Various subsets of predictors, with and without interaction terms were explored.
+- k-nearest neighbors models were trained using all available predictor variables. The choice of k was chosen using a validation set.
+- Decision tree models were trained using all available predictors. The choice of the complexity parameter was chosen using a validation set.
+
+```{r, linear-models}
+lm_mod_1 = lm(price ~ ., data = bk_est)
+lm_mod_2 = step(lm_mod_1, direction = "backward", trace = FALSE)
+lm_mod_3 = step(lm(price ~ .*. , data = bk_est), direction = "backward", trace = FALSE)
+lm_mod_4 = lm(log(price) ~ . , data = bk_est)
+lm_mod_5 = step(lm_mod_4, direction = "backward", trace = FALSE)
+lm_mod_6 = step(lm(log(price) ~ .*. , data = bk_est), direction = "backward", trace = FALSE)
+```
+
+```{r, knn-models}
+k = 1:100
+knn_mods = map(k, ~knnreg(price ~ ., data = bk_est, k = .x))
+```
+
+```{r, tree-models}
+cp = c(1.000, 0.100, 0.010, 0.001, 0)
+tree_mods = map(cp, ~rpart(price ~ ., data = bk_est, cp = .x))
+```
+
+## Evaluation
+
+To evaluate the ability to predict rental prices, the data was split into estimation, validation, and testing sets. Error metrics and graphics are reported using the validation data in the Results section.
+
+```{r, rmse-functions}
+calc_rmse = function(actual, predicted) {
+  sqrt(mean( (actual - predicted) ^ 2) )
+}
+
+calc_rmse_model = function(model, data, response) {
+  actual = data[[response]]
+  predicted = predict(model, data)
+  sqrt(mean((actual - predicted) ^ 2))
+}
+
+calc_rmse_log_model = function(model, data, response) {
+  actual = data[[response]]
+  predicted = exp(predict(model, data))
+  sqrt(mean((actual - predicted) ^ 2))
+}
+```
+
+***
+
+# Results
+
+```{r, calc-validation-error-lm}
+val_rmse_lm_mod_1 = calc_rmse_model(lm_mod_1, data = bk_val, "price")
+val_rmse_lm_mod_2 = calc_rmse_model(lm_mod_2, data = bk_val, "price")
+val_rmse_lm_mod_3 = calc_rmse_model(lm_mod_3, data = bk_val, "price")
+val_rmse_lm_mod_4 = calc_rmse_log_model(lm_mod_4, data = bk_val, "price")
+val_rmse_lm_mod_5 = calc_rmse_log_model(lm_mod_5, data = bk_val, "price")
+val_rmse_lm_mod_6 = calc_rmse_log_model(lm_mod_6, data = bk_val, "price")
+```
+
+```{r, calc-validation-error-knn}
+knn_preds = map(knn_mods, predict, bk_val)
+knn_val_rmse = map_dbl(knn_preds, calc_rmse, actual = bk_val$price)
+```
+
+```{r, calc-validation-error-tree}
+tree_preds = map(tree_mods, predict, bk_val)
+tree_val_rmse = map_dbl(tree_preds, calc_rmse, actual = bk_val$price)
+```
+
+```{r, numeric-results}
+results = tibble(
+  Model = c("Linear Model", "K's Nearest Neighbors", "Classification Tree"),
+  Best = c("Two Way Intersection With Backwards Selection and AIC", "k = 44", "cp = 0.001"),
+  Validation_RMSE = c(
+    val_rmse_lm_mod_3,
+    min(knn_val_rmse),
+    min(tree_val_rmse)
+    )
+)
+
+kable(results) %>%
+  kable_styling("striped", full_width = F)
+```
+
+```{r, graphical-results, fig.height = 4, fig.width = 12}
+par(mfrow = c(1, 3))
+plot(predict(lm_mod_3, bk_val), bk_val$price,
+     xlim = c(0, 500), ylim = c(0, 800), pch = 20,
+     xlab = "Predicted", ylab = "Actual",
+     main = "Best Linear Model", col = "red")
+abline(a = 0, b = 1, col = "red")
+grid()
+plot(predict(knnreg(price ~ ., data = bk_est, k = 44), bk_val), bk_val$price,
+     xlim = c(0, 500), ylim = c(0, 800), pch = 20,
+     xlab = "Predicted", ylab = "Actual",
+     main = "Best KNN Model (k=44)", col = "blue")
+abline(a = 0, b = 1, col = "blue")
+grid()
+plot(predict(rpart(price ~ ., data = bk_est, cp = .001), bk_val), bk_val$price,
+     xlim = c(0, 500), ylim = c(0, 800), pch = 20,
+     xlab = "Predicted", ylab = "Actual",
+     main = "Best Tree Model (cp = .001)", col = "green")
+abline(a = 0, b = 1, col = "green")
+grid()
+```
+
+***
+
+# Discussion
+
+```{r, test-rmse}
+lm_mod_3_trn = step(lm(price ~ .*. , data = bk_trn), direction = "backward", trace = FALSE)
+lm_mod_tst_rmse = calc_rmse_model(lm_mod_3_trn, data = bk_tst, "price")
+lm_mod_tst_rmse
+```
+
+If I was a supplier for rentals, I want to know the value of my property and the value of my competition. Therefore, it is important to fit models to the data and find out what model and variables best predict prices. If I was a consumer, I want to know the value of the properties so I can plan out my budget for the trip and avoid paying more than I have to. If I was a competitior, I can figure out what prices to set my rentals to avoid losing out to airbnb.
+Out of the three models that was fitted to the data, the two way interaction linear model with backwards selection and AIC have the lowest validation rmse. However, the rmse is around 72.63, indicating that there is a bit of error. According to the model, some significant variables that greatly affect the price is latitude, longitude, room type, number of reviews, reviews per month, and minimum nights available. This does not seem surprising to me. When shopping online, number of reviews and the contents of the reviews are the main things I look for. Things like location and duration are variables that are often set in stone, thus it is also important predictors of price. In addition, people often want to be comfortable when traveling so things like room type are also important. The data analysis we done here is limited in scope. In order to get a better grasp of the data, it might be worth considering to run the models on airbnb rentals in different cities, countries, seasons, or holidays. 
+
+***
+
+# Appendix
+
+## Data Dictionary
+
+- `latitude` - latitude coordinates of the listing
+- `longitude` - longitude coordinates of the listing
+- `room_type` - listing space type
+- `price` - price in dollars
+- `minimum_nights` - amount of nights minimum
+- `number_of_reviews` - number of reviews
+- `reviews_per_month` - number of reviews per month
+- `calculated_host_listings_count` - amount of listing per host
+- `availability_365` - number of days when listing is available for booking
+
+For additional background on the data, see the data source on Kaggle.
+
+## EDA
+
+```{r, eda-plots, fig.height = 4, fig.width = 12, message = FALSE}
+plot_1 = bk_trn %>% 
+  ggplot(aes(x = price)) + 
+  geom_histogram(bins = 30)
+
+plot_2 = bk_trn %>% 
+  ggplot(aes(x = room_type, y = price, colour = price)) + 
+  geom_boxplot()
+
+plot_3 = bk_trn %>% 
+  ggplot(aes(x = reviews_per_month, y = price)) + 
+  geom_point() + geom_smooth(span = 0.3)
+
+gridExtra::grid.arrange(plot_1, plot_2, plot_3, ncol = 3)
+```
+
+```{r, price-map, fig.height = 12, fig.width = 12}
+bk_trn %>% 
+  ggplot(aes(x = longitude, y = latitude, colour = price)) + 
+  geom_point()
+```
+
+[^1]: [New York City Airbnb Open Data](https://www.kaggle.com/dgomonov/new-york-city-airbnb-open-data)
