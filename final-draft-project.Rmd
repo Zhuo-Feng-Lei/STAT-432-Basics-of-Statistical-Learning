@@ -1,0 +1,280 @@
+---
+title: "Predicting House Prices in Washington"
+author: "Yinghao Li (yinghao3@illinois.edu), Junkyu Lee (junkyul2@illinois.edu), Vincent Oktavianus (vo8@illinois.edu), Zhuofeng Lei (zlei5@illinois.edu)"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document: 
+    theme: cosmo
+    toc: yes
+  pdf_document: default
+urlcolor: BrickRed
+---
+
+```{r, setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, fig.align = 'center')
+library(ggplot2)
+library(dplyr)
+library(caret)
+library(glmnet)
+library(kableExtra)
+library(corrplot)
+library(tidyverse)
+library(zipcode)
+library(knitr)
+```
+
+# Abstract
+
+> Statistical learning methods were applied to housing prices in the Washington state dataset in order to predict the housing price. A variety of learning techniques were explored and validated. The results show that this dataset may not contain enough features and observations for predicting housing prices. Due to the constraints of the dataset, more features and observations should be included and more data cleaning steps should be performed for further analysis.
+
+***
+
+# Introduction
+
+Buying a house is an important decision, and people should take the time to consider all the factors involved. There are several factors that people deemed important in buying a house that includes but not limited to the number of bedrooms, location, and year built. Being able to predict housing prices is important for both the seller and the consumer. As consumers, we might want to figure out whether housing prices are fair or not when purchasing a property. Therefore, it is important to be able to predict housing prices from different factors. If the actual price is higher than the predicted price, then it means the consumer is being scammed. If the actual price is lower than the predicted price, then it means the consumer is getting a really good deal. 
+
+The dataset contains information about housing prices in Washington state [^2]. It is the _18th_ largest and _13th_ most populated state in the United States. Moreover, its residents are distributed in a special pattern: approximately 60 percent of them live in the Seattle metropolitan area [^3]. Therefore, the housing price may be varied across the state. Being able to predict the wide-ranging price is an alluring goal that we want to accomplish.
+
+To construct a model to predict the housing price, statistical learning techniques have been applied to a dataset containing thousands of housing information in Washington state. The results indicate that the prediction is unreliable. Therefore, additional data and classification may be needed for further analysis.
+
+***
+
+## Data
+
+The dataset was accessed via Kaggle. [^1] It contains housing information from Washington such as the number of bedrooms, location, zip code, square feet of different floors and rooms, scenery, year built, etc. There are a total of 4600 observations and 18 variables. The response variable of interest is `price`. All other variables aside from `street`, `country`, `date`, `city`, and `yr_renovated`  will be used as predictors. Highly correlated features will also be excluded from our models. 
+
+We classified feature `city` into _high_, _mid_ and _low_ based on its population density [^5].
+ 
+1. _high_ density cities are the cities with a population of over 80,000 people. (Seattle, Kent, Bellevue, Auburn, Federal Way, Kirkland, and Renton)
+2. _mid_ density cities are the cities with a population of over 25,000 people. (Shoreline, Maple Valley, Sammamish, Des Moines, Bothell, Issaquah, Burien, Mercer Island, and SeaTac)
+3. _low_ density cities are the cities with a population of fewer than 25,000 people. 
+
+We also replace the feature `yr_renovated` by a new binary feature `is_renovated` with _yes_ indicating the house has undergone renovation and _no_ otherwise.
+
+```{r, data-wrangling}
+# reading in data and some cleaning
+house = read.csv("data/data.csv")
+house = house %>% 
+  filter(price != 0) %>% 
+  mutate(statezip = as.character(statezip)) %>%
+  mutate_at(vars(waterfront, view, condition), funs(factor)) %>%
+  rename(is_renovated = yr_renovated) %>%
+  dplyr::select(-c(date, street, country))
+
+# data cleaning (removed state abbreviation from zipcode)
+house$statezip = as.factor(as.numeric(substr(house$statezip, 4, nchar(house$statezip[1]))))
+
+# classification for city feature
+house$city_class = as.factor(case_when(
+  house$city %in% c("Seattle", "Kent", "Bellevue", "Auburn", "Federal Way", "Kirkland", "Renton") ~ "high",
+  house$city %in% c("Shoreline", "Maple Valley", "Sammamish", "Des Moines", "Bothell", "Issaquah", "Burien", "Mercer Island", "SeaTac") ~ "mid",
+  TRUE ~ "low"
+))
+
+# binary classification for renovation
+house$is_renovated = as.factor(case_when(
+  house$is_renovated != 0 ~ "no",
+  TRUE ~ "yes"
+))
+
+print("First 5 observations in dataset:")
+house[1:5,]
+```
+
+```{r, data-splitting}
+set.seed(42)
+# splitting dataset into testing and training
+trn_idx = sample(nrow(house), size = .7 * nrow(house))
+house_trn = house[trn_idx, ]
+house_tst = house[-trn_idx, ]
+```
+
+***
+
+# Methods
+
+We will use a correlation matrix to find highly correlated variables to exclude from the model. Doing so will help us avoid overfitting the data and decrease variance at the expense of some bias. Next, we will split the dataset into training and testing datasets. Then, we will fit different regression models using the train function in the `caret` [^4] package: k nearest neighbor, linear regression, ridge, lasso, and many more. We will evaluate the models for RMSE using cross-validation or out of bag sampling (whichever is more appropriate). 
+
+```{r, correlation matrix, fig.height = 4, fig.width = 12}
+#creating correlation matrix with numeric features
+correlation_matrix = cor(house_trn[, sapply(house, is.numeric)])
+corrplot(correlation_matrix)
+```
+
+```{r, highly correlated features}
+highly_correlated = findCorrelation(correlation_matrix, cutoff = 0.75)
+print(paste0("Features with correlation greater than .75: ", colnames(house_trn)[highly_correlated]))
+```
+
+```{r, knn}
+# knn model
+set.seed(42)
+knn_mod = train(price ~ . - city - sqft_living, data = house_trn, 
+                method = "knn", 
+                trControl = trainControl(method = "cv", number = 10))
+```
+
+```{r, lm}
+# multivariate linear regression
+set.seed(42)
+lm_mod = train(price ~ . - city - sqft_living, data = house_trn, 
+               method = "lm", 
+               trControl = trainControl(method = "cv", number = 10))
+```
+
+```{r, rf-oob}
+# random forest oob
+set.seed(42)
+rf_oob_mod = train(price ~ . - city - sqft_living, data = house_trn, 
+               method = "rf", 
+               trControl = trainControl(method = "oob"))
+```
+
+```{r, lasso}
+# lasso penalized linear regression model
+house_trn_x = model.matrix(price ~ . - city - sqft_living, data = house_trn)[, -1]
+set.seed(42)
+lasso_mod = cv.glmnet(house_trn_x, house_trn$price, nfolds = 10, alpha = 1)
+set.seed(42)
+lasso_pred = predict(lasso_mod, house_trn_x, s = lasso_mod$lambda.min)
+lasso_score = RMSE(lasso_pred, house_trn$price)
+```
+
+```{r, ridge}
+# ridge regression 
+set.seed(42)
+ridge_mod = cv.glmnet(house_trn_x, house_trn$price, nfolds = 10, alpha = 0)
+set.seed(42)
+ridge_pred = predict(ridge_mod, house_trn_x, s = ridge_mod$lambda.min)
+ridge_score = RMSE(ridge_pred, house_trn$price)
+```
+
+***
+
+## Evaluation
+
+To evaluate the ability to predict housing price, the data was split into training and testing sets. RMSE is reported using the training data in the results section.
+
+***
+
+# Results
+
+```{r, numeric-results}
+results = tibble(
+  Model = c("K's Nearest Neighbor",
+            "Multivariate Linear Regression Model",
+            "Random Forest",
+            "Lasso Penalized General Linear Model",
+            "Ridge Regression"),
+  Best = c(paste("k =", knn_mod$results$k[which.min(knn_mod$results$RMSE)]),
+           "Intercept held constant at a value of TRUE",
+           paste("mtry =", rf_oob_mod$results$mtry[which.min(rf_oob_mod$results$RMSE)]),
+           paste("lambda =", round(lasso_mod$lambda.min, 3)),
+           paste("lambda =", round(ridge_mod$lambda.min, 3))),
+  Evaluation = c("10 fold Cross-Validation",
+                 "10 fold Cross-Validation", 
+                 "Out of Bag Sampling",
+                 "10 fold Cross-Validation",
+                 "10 fold Cross-Validation"),
+  RMSE = c(knn_mod$results$RMSE[which.min(knn_mod$results$RMSE)],
+           lm_mod$results$RMSE[which.min(lm_mod$results$RMSE)], 
+           rf_oob_mod$results$RMSE[which.min(rf_oob_mod$results$RMSE)],
+           lasso_score,
+           ridge_score)
+)
+
+kable(results) %>%
+  kable_styling("striped", full_width = FALSE)
+```
+
+***
+
+# Discussion
+
+```{r, best-model-test-RMSE}
+result = RMSE(pred = predict(lm_mod, house_tst), obs = house_tst$price)
+```
+
+Given the results of assessing model performance on the training data, the model using linear regression that selects from the selected features and 10-fold cross-validations appears to have the lowest training RMSE out of all models. Using the test data, we obtain a testing RMSE of \$`r paste(round(result, 1))` | (\$195,833). Compared to the range of price seen in this data, ranging from roughly \$7,800 to \$26,590,000, with most observations in the range of \$150,000 - \$900,000, this seems to suggest that our model is performing very badly at the prediction task. Thus, we do not recommend putting this model into practice. 
+
+Another issue is the sampling procedure used to collect this data, which is not actually defined in the documentation. Two issues arise. First, there is a data imbalance in this dataset. Where there are many more listings from high-density cities than the low or medium density cities. This would cause problems if this model was used to screen the general population (Washington as a state). Lastly, the data were collected at only `r length(unique(house$city))` out of 100 cities in Washington state. [^6] Using the model outside these cities could result in extrapolation.
+
+The worst issue with this dataset is its age. The data was uploaded to Kaggle in 2018. However, the houses were listed in 2014. (It is unclear when the data was collected, there is no specific documentation for this data). Moreover, house prices rise faster than ever over the past few years. This could either make our model perform worse or even obsolete when predicting the house price. 
+
+While using more data, both samples and features can improve our model. Additional analysis based on updated data collection is the most reasonable choice to take.
+
+***
+
+# Appendix 
+
+## Data Dictionary
+
+- `date` - the date the property was added
+- `price` - House price
+- `bedrooms` - total number of bedrooms
+- `bathrooms` - total number of bathrooms
+- `sqft_living` - total area of the living room (in square ft)
+- `sqft_lot` - total area of the parking lot (in square ft)
+- `floors` - number of floors 
+- `waterfront` - have a waterfront (1 = true, 0 = false)
+- `view` - score for the view (0 - 4)
+- `condition` - property condition (1-5)
+- `sqft_above` - total area of the top floor (in square ft)
+- `sqft_basement` - total area of the basement (in square ft)
+- `yr_built` - year it was built
+- `yr_renovated` - the year the property last renovated
+- `street` - street address
+- `city` - city name
+- `statezip` - zip code for the property location
+- `country` - country name of the property location
+- `is_renovated` - have undergone renovation (yes - no)
+- `city_class` - city classification (high / mid / low)
+
+## EDA
+
+```{r, EDA-plot, fig.height = 4, fig.width = 12}
+data(zipcode)
+zipcode2 = zipcode[zipcode$zip %in% house_trn$statezip,]
+house_trn2 = house_trn %>%
+  mutate(latitude = NA) %>%
+  mutate(longitude = NA) %>%
+  dplyr::select(price, statezip, latitude, longitude)
+for (i in 1:nrow(house_trn2)) {
+  for(j in 1:nrow(zipcode2)) {
+    if(house_trn2$statezip[i] == zipcode2$zip[j]) {
+      house_trn2$latitude[i] = zipcode2$latitude[j]
+      house_trn2$longitude[i] = zipcode2$longitude[j]
+      break
+    }
+  }
+}
+temp = house_trn2 %>% 
+            group_by(statezip) %>%
+            summarise(price_mean = mean(price))
+
+house_trn3 = cbind(temp, zipcode2[, c(4, 5)])
+
+plot_1 = house_trn3 %>% 
+  ggplot(aes(x = longitude, y = latitude, colour = price_mean)) + 
+  geom_point() + 
+  ggtitle("Mean of Housing Price by Location")
+
+plot_2 = ggplot(house_trn, aes(x = city_class, fill = city_class)) +
+  geom_bar(stat = "count", position = "dodge") +
+  ggtitle("Distribution of City Classifications") 
+
+plot_3 = house_trn %>% 
+  ggplot(aes(x = price)) + 
+  ggtitle("Housing Price Distribution") +
+  xlim(0, 2000000) +
+  geom_histogram(bins = 3000)
+
+gridExtra::grid.arrange(plot_1, plot_2, plot_3, ncol = 3)
+```
+
+[^1]: [House Price Dataset](https://www.kaggle.com/shree1992/housedata)
+[^2]: [State Washington](https://en.wikipedia.org/wiki/Washington_(state))
+[^3]: [Seattle Metropolitan Area](https://en.wikipedia.org/wiki/Seattle_metropolitan_area)
+[^4]: [Caret Package](http://topepo.github.io/caret/index.html)
+[^5]: [Wikipedia: List of Cities Washington](https://en.wikipedia.org/wiki/List_of_cities_and_towns_in_Washington)
+[^6]: [World Population: WA](http://worldpopulationreview.com/states/washington-population/cities/)
